@@ -1,0 +1,1376 @@
+---
+title: "Minería de Datos en Enfermedad cardíaca"
+author: "David Sánchez"
+date: 'Junio 2022'
+output:
+  html_document:
+    highlight: default
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+  word_document: default
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introducción
+
+Este ejercicio se divide en dos partes: en la primera se lleva a cabo el Análisis Exploratorio de los Datos; en las segunda se aplica el modelo de Minería de Datos.
+
+# Carga de herramientas
+
+Cargo las herramientas que necesitaré.
+
+```{r message= FALSE, warning=FALSE}
+if (!require('readr')) install.packages('readr')
+library(readr)
+if (!require('dplyr')) install.packages('dplyr')
+library(dplyr)
+if (!require('GGally')) install.packages('GGally')
+library(GGally)
+if (!require('ggplot2')) install.packages('ggplot2')
+library(ggplot2)
+if (!require('ggpubr')) install.packages('ggpubr')
+library(ggpubr)
+if (!require('arules')) install.packages('arules')
+library(arules)
+if (!require('factoextra')) install.packages('factoextra')
+library(factoextra)
+if (!require('corrplot')) install.packages('corrplot')
+library(corrplot)
+if (!require('cluster')) install.packages('cluster')
+library(cluster)
+if (!require("gridExtra")) install.packages("gridExtra")
+library(gridExtra)
+if (!require("ggmosaic")) install.packages("ggmosaic")
+library(ggmosaic)
+if (!require('dbscan')) install.packages('dbscan')
+library(dbscan)
+if(!require('C50')) install.packages('C50', repos='http://cran.us.r-project.org')
+library(C50)
+if (!require('randomForest')) install.packages('randomForest')
+library(randomForest)
+if (!require('caret')) install.packages('caret')
+library(caret)
+if (!require('ROCR')) install.packages('ROCR')
+library(ROCR)
+```
+
+
+# Análisis exploratorio de los datos
+
+## Introducción
+
+Escojo un dataset sobre enfermedad cardíaca y factores que la pueden propiciar con el objetivo principal de crear un modelo que prediga sin un paciente padecerá o no enfermedad cardíaca y con el objetivo secundario de crear y analizar clústers de pacientes sobre el conjunto de datos.
+
+El dataset en cuestión es 'Heart Failure Prediction Dataset' de https://www.kaggle.com/fedesoriano/heart-failure-prediction.
+
+Mi interés en este dataset es el de asociar técnicas de Minería de Datos a la Medicina para mejorar la asistencia a los pacientes.
+
+
+## Preprocesado y gestión de características
+
+Cargo el archivo heart.csv en la variable heart y muestro su estructura:
+```{r message= FALSE, warning=FALSE}
+path_heart <- 'heart.csv'
+heart <- read_csv(path_heart, show_col_types = FALSE)
+str(heart)
+```
+
+Defino sus columnas:
+
+  - Age: edad del paciente [años]
+  
+  - Sex: sexo del paciente [M: Male, F: Female]
+  
+  - ChestPainType: tipo de dolor torácico [TA: Angina Típica, ATA: Angina Atípica, NAP: Dolor no-angina, ASY: Asintomático]
+  
+  - RestingBP: tensión arterial de reposo [mmHg]
+  
+  - Cholesterol: colesterol sérico [mm/dl]  *Imagino que las unidades son mg/dl.
+  
+  - FastingBS: glicemia en ayunas [1: if FastingBS > 120 mg/dl, 0: otherwise]
+  
+  - RestingECG: electrocardiograma de reposo [Normal: Normal, ST: anormalidad ST-T (inversiones de la onda T y/o elevación o depresión ST > 0.05 mV), LVH: hipertrofia ventricular izquierda según criterios de Estes]
+  
+  - MaxHR: frecuencia cardíaca máxima alcanzada [entre 60 y 202 lpm]
+  
+  - ExerciseAngina: angina de esfuerzo [Y: Yes, N: No]
+  
+  - Oldpeak: oldpeak = ST [Valor numérico en depresión] *Depresión ST inducida por el ejercicio en relación al reposo.
+  
+  - ST_Slope: pendiente del segmenteo ST durante el ejercicio [Up: upsloping, Flat: flat, Down: downsloping]
+  
+  - HeartDisease: clase output [1: enfermedad cardíaca, 0: Normal]
+
+Resumen estadístico de heart:
+```{r message= FALSE, warning=FALSE}
+summary(heart)
+```
+
+Confirmo que no hay valores nulos ni valores en blanco
+```{r message= FALSE, warning=FALSE}
+print('Nulos (NA)')
+colSums(is.na(heart))
+print('Valores en blanco')
+colSums(heart=="")
+```
+
+Renombro las clases de las variables categóricas por nombres más intuitivos
+```{r message= FALSE, warning=FALSE}
+heart[heart$Sex == 'M', 'Sex'] = 'Male'
+heart[heart$Sex == 'F', 'Sex'] = 'Female'
+
+heart[heart$ChestPainType == 'TA', 'ChestPainType'] = 'Typical'
+heart[heart$ChestPainType == 'ATA', 'ChestPainType'] = 'Atypical'
+heart[heart$ChestPainType == 'NAP', 'ChestPainType'] = 'Non-Anginal'
+heart[heart$ChestPainType == 'ASY', 'ChestPainType'] = 'Asymptomatic'
+
+heart <- heart %>% mutate(FastingBS=as.character(FastingBS))
+heart[heart$FastingBS == 0, 'FastingBS'] = 'No hyperglycemia'
+heart[heart$FastingBS == 1, 'FastingBS'] = 'Hyperglycemia'
+
+heart[heart$RestingECG == 'ST', 'RestingECG'] = 'ST-T abnormality'
+heart[heart$RestingECG == 'LVH', 'RestingECG'] = 'LV hypertrophy'
+
+heart[heart$ExerciseAngina == 'Y', 'ExerciseAngina'] = 'Yes'
+heart[heart$ExerciseAngina == 'N', 'ExerciseAngina'] = 'No'
+
+heart <- heart %>% mutate(HeartDisease=as.character(HeartDisease))
+heart[heart$HeartDisease == 0, 'HeartDisease'] = 'No'
+heart[heart$HeartDisease == 1, 'HeartDisease'] = 'Yes'
+```
+
+Transformo las variables categóricas en factores
+```{r message= FALSE, warning=FALSE}
+heart_tr <- heart %>% mutate(Sex=as.factor(Sex), ChestPainType=as.factor(ChestPainType),
+                             FastingBS=as.factor(FastingBS), RestingECG=as.factor(RestingECG),
+                             ExerciseAngina=as.factor(ExerciseAngina), ST_Slope=as.factor(ST_Slope),
+                             HeartDisease=as.factor(HeartDisease))
+```
+
+Visualizo las variables numéricas
+```{r message= FALSE, warning=FALSE}
+ggpairs(heart_tr, columns = c('Age', 'RestingBP', 'Cholesterol', 'MaxHR', 'Oldpeak'), aes(color = HeartDisease, alpha = 0.5))
+```
+
+Detecto visualmente outliers: son valores de 0 en las variables Cholesterol (172 filas) y RestingBP (1 fila), lo cual carece de sentido (ni el colesterol ni la tensión arterial de reposo pueden ser 0).
+
+Busco formalmente otros outliers apoyándome en la función fun_outlier_detection (definida a continuación).
+```{r message= FALSE, warning=FALSE}
+variables_categoricas <- c('Sex', 'ChestPainType', 'FastingBS', 'RestingECG', 'ExerciseAngina', 'ST_Slope', 'HeartDisease')
+variables_numericas <- c('Age', 'RestingBP', 'Cholesterol', 'MaxHR', 'Oldpeak')
+
+fun_outlier_detection <- function(var_num, df = heart_tr) {
+  q <- quantile(unlist(df[ , var_num]), probs=c(.25, .75))
+  iqr <- IQR(unlist(df[ , var_num]))
+  limite_sup <-  q[2]+1.5*iqr
+  limite_inf <- q[1]-1.5*iqr
+  if(max(df[ , var_num]) > limite_sup | min(df[ , var_num]) < limite_inf) {
+    mensaje <- 'Hay outliers:'
+    print(mensaje)
+    a <- df %>% filter(get(var_num) > limite_sup | get(var_num) < limite_inf)
+    print(a)  # Muestro en un dataframe los registros que contienen los outliers de la variable numérica estudiada.
+  }
+  if(max(df[ , var_num]) < limite_sup & min(df[ , var_num]) > limite_inf) {
+    mensaje <- 'No hay outliers.'
+    print(mensaje)
+  }
+}
+
+
+fun_outlier_detection('Age')
+```
+
+```{r message= FALSE, warning=FALSE}
+fun_outlier_detection('RestingBP')
+```
+
+En el caso de 'RestingBP', los outliers por encima del límite superior y el de 80 son plausibles, por lo que no haré ninguna acción sobre ellos; el outlier por debajo del límite inferior de 0 no es posible; más adelante trato este valor.
+
+```{r message= FALSE, warning=FALSE}
+fun_outlier_detection('Cholesterol')
+```
+
+Para Cholesterol, los outliers por encima del límte superior son plausibles, por lo que los mantengo sin cambios; en cambio, los registros que contienen 0 en la variable Cholesterol son erróneos (no es posible tener colesterol de 0); los trato más adelante.
+
+```{r message= FALSE, warning=FALSE}
+fun_outlier_detection('MaxHR')
+```
+
+Los dos registros con MaxHR de 63 y 60 también son posibles, así que los mantengo sin cambios.
+
+```{r message= FALSE, warning=FALSE}
+fun_outlier_detection('Oldpeak')
+```
+
+Estos valores de Oldpeak, si bien extremos, también son plausibles; los mantengo sin cambios.
+
+En cuanto a Cholesterol y RestingBP: para aprovechar la información de estos pacientes que aporta sus otras variables, imputo la mediana de Cholesterol y RestingBP a sus respectivos registros iguales a 0.
+```{r message= FALSE, warning=FALSE}
+heart_tr[heart_tr$Cholesterol == 0, 'Cholesterol'] <- median(heart_tr$Cholesterol)
+heart_tr[heart_tr$RestingBP == 0, 'RestingBP'] <- median(heart_tr$RestingBP)
+```
+
+Visualizo de nuevo, observando la ausencia de los outliers tratados. Constato que apenas hay correlación lineal entre las variables numéricas.
+```{r message= FALSE, warning=FALSE}
+ggpairs(heart_tr, columns = c('Age', 'RestingBP', 'Cholesterol', 'MaxHR', 'Oldpeak'), aes(color = HeartDisease, alpha = 0.5))
+```
+
+Muestro los boxplots de las variables numéricas para cada variable categórica (para ello, uso la función fun1, que defino a continuación).
+```{r message= FALSE, warning=FALSE}
+fun1 <- function(var_cat) {
+  nuevo_df <- heart_tr %>% select({{var_cat}}, Age, RestingBP, Cholesterol, MaxHR, Oldpeak)
+  for (i in 2:ncol(nuevo_df)) {
+    columna <- names(nuevo_df)[i]
+    nombre_grafico <- paste('g', i-1, sep = "")
+    grafico <- ggplot(nuevo_df, aes_string(x=names(nuevo_df)[1], y=columna, fill=names(nuevo_df)[1])) +
+      geom_boxplot() +
+      guides(x = guide_axis(angle = 30)) +
+      theme(axis.text=element_text(size=8))
+    assign(nombre_grafico, grafico)
+  }
+  grafico_multiple <- ggarrange(g1, g2, g3, g4, g5, ncol = 3, nrow=2, common.legend = TRUE, legend="bottom")
+  titulo <- paste(as.character(substitute(var_cat)), " vs variables numéricas: boxplots", sep = "")
+  grafico_multiple_titulo <- annotate_figure(grafico_multiple, top = text_grob(titulo, color = "red", face = "bold", size = 12))
+  return(grafico_multiple_titulo)
+}
+
+fun1(Sex)
+fun1(ChestPainType)
+fun1(FastingBS)
+fun1(RestingECG)
+fun1(ExerciseAngina)
+fun1(ST_Slope)
+fun1(HeartDisease)
+```
+
+Examino si hay diferencias significativas entre los grupos de las variables categóricas con respecto a las variables numéricas usando la función fun2 (definida a continuación).
+```{r message= FALSE, warning=FALSE}
+fun2 <- function(var_num, var_cat) {
+  level_count <- c()
+  for (i in unique(heart_tr[, var_cat])) {
+    level_count <- append(level_count, i)
+  }
+  a <- length(level_count)  # la variable 'a' almacena cuántas clases hay en la categoría.
+  if(a == 2) {
+    b <- wilcox.test(get(var_num) ~ get(var_cat), data = heart_tr, exact = FALSE)
+    print(noquote(paste('wilcox.test(', var_num, ' ~ ', var_cat, '): ', 'p.value ', b$p.value, sep = "")))
+  }
+  if(a > 2) {
+    b <- kruskal.test(get(var_num) ~ get(var_cat), data = heart_tr)
+    print(noquote(paste('kruskal.test(', var_num, ' ~ ', var_cat, '): ', 'p.value ', b$p.value, sep = "")))
+  }
+}
+
+
+for (i in variables_numericas) {
+  for (j in variables_categoricas) {
+    fun2(i, j)
+  }
+}
+```
+
+No hay diferencias significativas (p > 0.05) entre las medianas de los grupos en Age ~ Sex, RestingBP ~ Sex, RestingBP ~ ChestPainType, Cholesterol ~ ChestPainType, Cholesterol ~ FastingBS, Cholesterol ~ ExerciseAngina, Cholesterol ~ ST_Slope y Cholesterol ~ HeartDisease; en el resto de combinaciones sí hay diferencias entre los grupos.
+
+Estudio la asociación entre variables categóricas.
+```{r message= FALSE, warning=FALSE}
+comb_cat <- combn(variables_categoricas, 2)
+for (i in 1:ncol(comb_cat)) {
+  tab <- table(unlist(heart_tr[,comb_cat[,i][1]]), unlist(heart_tr[,comb_cat[,i][2]]))
+  mosaic_tab <- mosaicplot(tab, xlab = comb_cat[,i][1], ylab = comb_cat[,i][2],
+                           main = paste('Mosaicplot: ', comb_cat[,i][1], ' - ', comb_cat[,i][2], sep = ""),
+                           color = TRUE, las = 1)
+  print(comb_cat[,i])
+  print(chisq.test(tab))
+  mosaic_tab
+}
+```
+
+Para p ≤ 0.05, las variables tienen una asociación estadísticamente significativa (son dependientes). Sobre el resto (Sex y RestingECG, FastingBS y ExerciseAngina, RestingECG y ST_Slope), con p > 0.05, no podemos concluir que estén asociadas (son independientes).
+
+Guardo las variables numéricas normalizadas en heart_tr_norm.
+```{r message= FALSE, warning=FALSE}
+heart_tr_norm <- heart_tr %>% mutate(Age=(Age-mean(Age))/sd(Age),
+                                     RestingBP=(RestingBP-mean(RestingBP))/sd(RestingBP),
+                                     Cholesterol=(Cholesterol-mean(Cholesterol))/sd(Cholesterol),
+                                     MaxHR=(MaxHR-mean(MaxHR))/sd(MaxHR),
+                                     Oldpeak=(Oldpeak-mean(Oldpeak))/sd(Oldpeak))
+```
+
+Discretizo la variable RestingBP en Resting_BP_cat.
+```{r message= FALSE, warning=FALSE}
+vector_cat_RestingBP <- discretize(heart_tr$RestingBP, method = 'fixed', breaks = c(-Inf, 100, 140, +Inf), labels = c('Hipotenso', 'Normotenso', 'Hipertenso'))
+heart_tr['Resting_BP_cat'] <- vector_cat_RestingBP
+heart_tr_norm['Resting_BP_cat'] <- vector_cat_RestingBP
+```
+
+
+Realizo PCA (recojo las variables numéricas en heart_num, guardo PCA en heart_num.pca con los datos escalados).
+```{r message= FALSE, warning=FALSE}
+heart_num <- heart_tr %>% select(Age, RestingBP, Cholesterol, MaxHR, Oldpeak)
+heart_num.pca <- prcomp(heart_num, center = TRUE, scale = TRUE)
+eigenvalues <- heart_num.pca$sdev**2  # Hay 5 eigenvalues.
+```
+
+Muestro la variablidad retenida por los 3 primeros componentes principales.
+```{r message= FALSE, warning=FALSE}
+(sum(eigenvalues[1:3])/sum(eigenvalues))*100
+```
+
+Lo confirmo.
+```{r message= FALSE, warning=FALSE}
+get_eig(heart_num.pca)
+```
+
+Visualizo la contribución de cada componente principal.
+```{r message= FALSE, warning=FALSE}
+fviz_eig(heart_num.pca)
+```
+
+Selecciono los 3 primeros componentes principales, pues retienen un 72% de la varianza total.
+```{r message= FALSE, warning=FALSE}
+var <- get_pca_var(heart_num.pca)
+corrplot(var$cos2[,1:3], is.corre=FALSE)
+```
+
+Vemos cómo las variables mejor representadas son Edad, Cholesterol y RestingBP en los PC1, PC2 y PC3, respectivamente.
+
+```{r message= FALSE, warning=FALSE}
+corrplot(var$contrib[,1:3], is.cor=FALSE)
+```
+
+Vemos que las variables que más aportan al componente son:
+- PC1: Age, MaxHR.
+- PC2: Cholesterol, MaxHR.
+- PC3: RestingBP, Cholesterol.
+
+```{r message= FALSE, warning=FALSE}
+fviz_pca_var(heart_num.pca,
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE)
+```
+
+Confirmo la poca correlación entre las variables numéricas. Las que más contribuyen a los componentes principales serían: Cholesterol, MaxHR y Age.
+
+## Conclusiones
+
+Tras transformar en factores las variables categóricas, renombrar sus clases y tratar los outliers (he imputado las medianas de Cholesterol y RestingBP a sus valores de 0, carentes de sentido en estas dos variables), de todo el análisis se concluye que:
+
+- Variables numéricas: apenas hay correlación lineal entre ellas; del estudio de PCA se extrae que las variables numéricas más importantes son Cholesterol, MaxHR y Age.
+
+- Variables categóricas: la mayoría de las relaciones entre parejas de estas variables muestra dependencia entre las dos variables estudiadas, a excepción de Sex ~ RestingECG, FastingBS ~ ExerciseAngina, RestingECG ~ ST_Slope, que serían variables independientes.
+
+- Variables numéricas en función de las variables categóricas: hay diferencias en las medianas de las varaiables numéricas para las distintas clases de cada variable categórica, excepto en Age ~ Sex, RestingBP ~ Sex, RestingBP ~ ChestPainType, Cholesterol ~ ChestPainType, Cholesterol ~ FastingBS, Cholesterol ~ ExerciseAngina, Cholesterol ~ ST_Slope y Cholesterol ~ HeartDisease.
+
+Finalmente, he guardado el dataset con los datos normalizados (para clustering) y sin normalizar (para usar algoritmos predictores como los árboles de decisión).
+
+He discretizado la variable RestingBP por si más adelante fuese de utilidad.
+
+
+
+# Aplicación del modelo o de los modelos de Minería de Datos
+
+## Introducción
+
+Aplico técnicas de minería de datos sobre el dataset procesado.
+
+
+## Minería de Datos
+
+```{r message= FALSE, warning=FALSE}
+# Excluyo la última variable (es la versión categórica de RestingBP) y retiro la etiqueta (penúltima variable):
+heart_tr_ne <- heart_tr[,1:11]  # _ne de no etiquetado.
+heart_tr_norm_ne <- heart_tr_norm[,1:11]  # _ne de no etiquetado.
+
+# Genero la matriz de disimilitud con daisy() sobre los datos normalizados:
+mdd <- daisy(heart_tr_norm_ne, metric = c("gower"))
+
+# Aplico pam(), de Partitioning Around Medoids (PAM), con diferente número de clústers:
+resultados <- rep(0, 8)
+for (i in c(2:8)) {
+  set.seed(2)
+  fit <- pam(mdd, i)
+  y_cluster <- fit$clustering
+  sil <- silhouette(y_cluster, mdd)
+  resultados[i] <- mean(sil[,3])
+}
+```
+
+Visualizo el valor de silhouette( ) según el número de clústers. Me quedaría con 2 clústers.
+```{r message= FALSE, warning=FALSE}
+plot(2:8,resultados[2:8],type="o",col="red",xlab="Cantidad de clústers",ylab="Valor de la silueta",main="Valor de silueta según número de clústers")
+```
+Comparo visualmente la clasificación real con la clusterización realizada por PAM. Son muy parecidas en las variables numéricas.
+```{r message= FALSE, warning=FALSE}
+
+# Agrupo por parejas todas las combinaciones de variables numéricas y categóricas
+vn <- c('Age', 'RestingBP', 'Cholesterol', 'MaxHR', 'Oldpeak')
+vc <- c('Sex', 'ChestPainType', 'FastingBS', 'RestingECG', 'ExerciseAngina', 'ST_Slope')
+
+vn_parejas <- combn(vn, 2)
+vc_parejas <- combn(vc, 2)
+
+# Clusterizo con pam() e inserto la nueva etiqueta del clúster:
+set.seed(4)
+heart2clusters <- pam(mdd, 2)
+heart_tr_norm_ne_cluster <- heart_tr_norm_ne
+heart_tr_norm_ne_cluster['cluster_pam'] <- as.factor(heart2clusters$clustering)
+
+# Defino y aplico la función gráfica fun_graf_n para variables numéricas:
+fun_graf_n <- function(a, b) {
+ g1 <- ggplot(heart_tr_norm_ne_cluster, aes(x = get(a), y = get(b), color = cluster_pam)) +
+   ggtitle(paste('PAM: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ g2 <- ggplot(heart_tr_norm, aes(x = get(a), y = get(b), color = HeartDisease)) +
+   ggtitle(paste('REAL: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ return(grid.arrange(g1, g2, ncol = 2))
+}
+
+
+for (i in 1:dim(vn_parejas)[2]) {
+  fun_graf_n(vn_parejas[,i][1], vn_parejas[,i][2])
+}
+```
+
+Y la distribución de los clústers y de las clases de HeartDisease es similar entre los distintos pares de variables categóricas.
+```{r message= FALSE, warning=FALSE}
+fun_graf_c <- function(varcat1, varcat2) {
+  g1 <- ggplot(data = heart_tr_norm_ne_cluster) +
+    geom_mosaic(aes_string(x=paste("product(", varcat1, ", ", varcat2, ")"), fill = 'cluster_pam')) +
+    labs(y=varcat1,
+         x=paste("cluster: ", varcat2, sep=''),
+         title = paste("Mosaicplot PAM: ", varcat1, ' ~ ', varcat2, sep='')) +
+    theme(axis.text.x = element_text(angle = 90))
+  
+  g2 <- ggplot(data = heart_tr_norm) +
+    geom_mosaic(aes_string(x=paste("product(", varcat1, ", ", varcat2, ")"), fill = 'HeartDisease')) +
+    labs(y=varcat1,
+         x=paste("HeartDisease class: ", varcat2, sep=''),
+         title = paste("Mosaicplot REAL: ", varcat1, ' ~ ', varcat2, sep='')) +
+    theme(axis.text.x = element_text(angle = 90))
+
+  return(grid.arrange(g1, g2, layout_matrix = rbind(c(1, 1),
+                                           c(2, 2))))
+}
+
+
+for (i in 1:dim(vc_parejas)[2]) {
+  fun_graf_c(vc_parejas[,i][1], vc_parejas[,i][2])
+}
+```
+
+Asigno la clase de HeartDisease al clúster adecuado y calculo la exactitud.
+```{r message= FALSE, warning=FALSE}
+heart_pam_cluster <- heart_tr_norm_ne_cluster %>% mutate(cluster_pam = as.character(cluster_pam))
+heart_pam_cluster[heart_pam_cluster$cluster_pam == '1', 'cluster_pam'] <- 'No'
+heart_pam_cluster[heart_pam_cluster$cluster_pam == '2', 'cluster_pam'] <- 'Yes'
+heart_pam_cluster['etiqueta_real'] <- as.character(heart_tr_norm$HeartDisease)
+exactitud <- sum(heart_pam_cluster$cluster_pam == heart_pam_cluster$etiqueta_real)/dim(heart_pam_cluster)[1]
+print(exactitud)
+```
+
+Comparo los resutados de summary() para los grupos reales y los clústers:
+```{r message= FALSE, warning=FALSE}
+cat("\nHeartDisease (real) == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$etiqueta_real == 'Yes',])
+cat("\nHeartDisease (real) == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$etiqueta_real == 'No',])
+cat("\nPAM cluster == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_pam == 'Yes',])
+cat("\nPAM cluster == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_pam == 'No',])
+```
+
+
+Pruebo con una matriz de disimilitud con una métrica distinta a la distancia de Gower.
+```{r message= FALSE, warning=FALSE}
+# Genero la matriz de disimilitud con daisy() sobre los datos normalizados:
+mdd <- daisy(heart_tr_norm_ne, metric = c("euclidean"))
+
+# Aplico pam(), de Partitioning Around Medoids (PAM), con diferente número de clústers:
+resultados <- rep(0, 8)
+for (i in c(2:8)) {
+  set.seed(2)
+  fit <- pam(mdd, i)
+  y_cluster <- fit$clustering
+  sil <- silhouette(y_cluster, mdd)
+  resultados[i] <- mean(sil[,3])
+}
+```
+
+Visualizo el valor de silhouette( ) según el número de clústers. Me quedaría de nuevo con 2 clústers.
+```{r message= FALSE, warning=FALSE}
+plot(2:8,resultados[2:8],type="o",col="red",xlab="Cantidad de clústers",ylab="Valor de la silueta",main="Valor de silueta según número de clústers")
+```
+
+Clusterizo con pam() e inserto la nueva etiqueta del clúster.
+```{r message= FALSE, warning=FALSE}
+set.seed(4)
+heart2clusters <- pam(mdd, 2)
+heart_tr_norm_ne_cluster <- heart_tr_norm_ne
+heart_tr_norm_ne_cluster['cluster_pam'] <- as.factor(heart2clusters$clustering)
+```
+
+
+Comparo visualmente la clasificación real con la clusterización realizada por PAM en las variables numéricas.
+```{r message= FALSE, warning=FALSE}
+for (i in 1:dim(vn_parejas)[2]) {
+  fun_graf_n(vn_parejas[,i][1], vn_parejas[,i][2])
+}
+```
+
+Y ahora en las variables categóricas.
+```{r message= FALSE, warning=FALSE}
+for (i in 1:dim(vc_parejas)[2]) {
+  fun_graf_c(vc_parejas[,i][1], vc_parejas[,i][2])
+}
+```
+
+
+Asigno la clase de HeartDisease al clúster adecuado y calculo la exactitud.
+```{r message= FALSE, warning=FALSE}
+heart_pam_cluster <- heart_tr_norm_ne_cluster %>% mutate(cluster_pam = as.character(cluster_pam))
+heart_pam_cluster[heart_pam_cluster$cluster_pam == '1', 'cluster_pam'] <- 'No'
+heart_pam_cluster[heart_pam_cluster$cluster_pam == '2', 'cluster_pam'] <- 'Yes'
+heart_pam_cluster['etiqueta_real'] <- as.character(heart_tr_norm$HeartDisease)
+exactitud <- sum(heart_pam_cluster$cluster_pam == heart_pam_cluster$etiqueta_real)/dim(heart_pam_cluster)[1]
+print(exactitud)
+```
+
+Comparo los resutados de summary() para los grupos reales y los clústers:
+```{r message= FALSE, warning=FALSE}
+cat("\nHeartDisease (real) == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$etiqueta_real == 'Yes',])
+cat("\nHeartDisease (real) == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$etiqueta_real == 'No',])
+cat("\nPAM cluster == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_pam == 'Yes',])
+cat("\nPAM cluster == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_pam == 'No',])
+```
+
+Obtengo los mismos resultados que si uso metric = 'gower' en la función daisy(). Buscando en la documentación, concluyo que ocurre de este modo porque daisy(), si detecta variables categóricas, automáticamente utiliza la distancia de Gower.
+
+
+Para probar diferentes distancias, selecciono las variables numéricas y aplico sobre ellas distintas métricas. En todos los casos el número de clústers sería 2.
+```{r message= FALSE, warning=FALSE}
+heart_num_ne <- heart_tr_norm_ne %>% dplyr::select(all_of(vn))
+mdde <- daisy(heart_num_ne, metric = 'euclidean')
+mddm <- daisy(heart_num_ne, metric = 'manhattan')
+mddg <- daisy(heart_num_ne, metric = 'gower')
+
+# Para la distancia euclidiana:
+resultados <- rep(0, 8)
+for (i in c(2:8)) {
+  set.seed(2)
+  fit <- kmeans(mdde, i)
+  y_cluster <- fit$cluster
+  sil <- silhouette(y_cluster, mdde)
+  resultados[i] <- mean(sil[,3])
+}
+plot(2:8,resultados[2:8],type="o",col="red",xlab="Cantidad de clústers",ylab="Valor de la silueta",main="Variables numéricas y distancia euclidiana")
+```
+
+```{r message= FALSE, warning=FALSE}
+# Para la distancia de Manhattan:
+resultados <- rep(0, 8)
+for (i in c(2:8)) {
+  set.seed(2)
+  fit <- kmeans(mddm, i)
+  y_cluster <- fit$cluster
+  sil <- silhouette(y_cluster, mddm)
+  resultados[i] <- mean(sil[,3])
+}
+plot(2:8,resultados[2:8],type="o",col="red",xlab="Cantidad de clústers",ylab="Valor de la silueta",main="Variables numéricas y distancia de Manhattan")
+```
+
+```{r message= FALSE, warning=FALSE}
+# Para la distancia de Gower:
+resultados <- rep(0, 8)
+for (i in c(2:8)) {
+  set.seed(2)
+  fit <- kmeans(mddg, i)
+  y_cluster <- fit$cluster
+  sil <- silhouette(y_cluster, mddg)
+  resultados[i] <- mean(sil[,3])
+}
+plot(2:8,resultados[2:8],type="o",col="red",xlab="Cantidad de clústers",ylab="Valor de la silueta",main="Variables numéricas y distancia de Gower")
+```
+
+Aplico kmeans según las diferentes distancias.
+```{r message= FALSE, warning=FALSE}
+set.seed(4)
+heart2clusters_euc <- kmeans(mdde, 2)
+set.seed(8)
+heart2clusters_man <- kmeans(mddm, 2)
+set.seed(7)
+heart2clusters_gow <- kmeans(mddg, 2)
+heart_tr_norm_ne_cluster['cluster_kmeans_euc'] <- as.factor(heart2clusters_euc$cluster)
+heart_tr_norm_ne_cluster['cluster_kmeans_man'] <- as.factor(heart2clusters_man$cluster)
+heart_tr_norm_ne_cluster['cluster_kmeans_gow'] <- as.factor(heart2clusters_gow$cluster)
+```
+
+Redefino la función fun_graf_n para estos 3 nuevos casos; visualizo los clústers propuestos respecto a la clasificación real; asigno el clúster propuesto a la clasificación correspondiente; calculo la exactitud para cada distancia.
+```{r message= FALSE, warning=FALSE}
+fun_graf_n <- function(a, b) {
+ g1 <- ggplot(heart_tr_norm_ne_cluster, aes(x = get(a), y = get(b), color = cluster_kmeans_euc)) +
+   ggtitle(paste('Kmeans - d. euclidiana: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ g2 <- ggplot(heart_tr_norm, aes(x = get(a), y = get(b), color = HeartDisease)) +
+   ggtitle(paste('REAL: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ return(grid.arrange(g1, g2, ncol = 2))
+}
+
+
+for (i in 1:dim(vn_parejas)[2]) {
+  fun_graf_n(vn_parejas[,i][1], vn_parejas[,i][2])
+}
+```
+
+```{r message= FALSE, warning=FALSE}
+fun_graf_n <- function(a, b) {
+ g1 <- ggplot(heart_tr_norm_ne_cluster, aes(x = get(a), y = get(b), color = cluster_kmeans_man)) +
+   ggtitle(paste('Kmeans - d. Manhattan: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ g2 <- ggplot(heart_tr_norm, aes(x = get(a), y = get(b), color = HeartDisease)) +
+   ggtitle(paste('REAL: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ return(grid.arrange(g1, g2, ncol = 2))
+}
+
+
+for (i in 1:dim(vn_parejas)[2]) {
+  fun_graf_n(vn_parejas[,i][1], vn_parejas[,i][2])
+}
+```
+
+```{r message= FALSE, warning=FALSE}
+fun_graf_n <- function(a, b) {
+ g1 <- ggplot(heart_tr_norm_ne_cluster, aes(x = get(a), y = get(b), color = cluster_kmeans_gow)) +
+   ggtitle(paste('Kmeans - d. Gower: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ g2 <- ggplot(heart_tr_norm, aes(x = get(a), y = get(b), color = HeartDisease)) +
+   ggtitle(paste('REAL: ', b, ' ~ ', a, sep='')) +
+   labs(x=a, y=b) + geom_point()
+
+ return(grid.arrange(g1, g2, ncol = 2))
+}
+
+
+for (i in 1:dim(vn_parejas)[2]) {
+  fun_graf_n(vn_parejas[,i][1], vn_parejas[,i][2])
+}
+```
+
+```{r message= FALSE, warning=FALSE}
+heart_pam_cluster <- heart_tr_norm_ne_cluster %>% mutate(cluster_kmeans_euc = as.character(cluster_kmeans_euc),
+                                                         cluster_kmeans_man = as.character(cluster_kmeans_man),
+                                                         cluster_kmeans_gow = as.character(cluster_kmeans_gow))
+
+heart_pam_cluster[heart_pam_cluster$cluster_kmeans_euc == '1', 'cluster_kmeans_euc'] <- 'No'
+heart_pam_cluster[heart_pam_cluster$cluster_kmeans_euc == '2', 'cluster_kmeans_euc'] <- 'Yes'
+
+heart_pam_cluster[heart_pam_cluster$cluster_kmeans_man == '1', 'cluster_kmeans_man'] <- 'Yes'
+heart_pam_cluster[heart_pam_cluster$cluster_kmeans_man == '2', 'cluster_kmeans_man'] <- 'No'
+
+heart_pam_cluster[heart_pam_cluster$cluster_kmeans_gow == '1', 'cluster_kmeans_gow'] <- 'No'
+heart_pam_cluster[heart_pam_cluster$cluster_kmeans_gow == '2', 'cluster_kmeans_gow'] <- 'Yes'
+
+heart_pam_cluster['etiqueta_real'] <- as.character(heart_tr_norm$HeartDisease)
+
+exactitud_euc <- sum(heart_pam_cluster$cluster_kmeans_euc == heart_pam_cluster$etiqueta_real)/dim(heart_pam_cluster)[1]
+exactitud_man <- sum(heart_pam_cluster$cluster_kmeans_man == heart_pam_cluster$etiqueta_real)/dim(heart_pam_cluster)[1]
+exactitud_gow <- sum(heart_pam_cluster$cluster_kmeans_gow == heart_pam_cluster$etiqueta_real)/dim(heart_pam_cluster)[1]
+
+print(paste('Exactitud de Kmeans con distancia euclidiana (sólo variables numéricas): ', exactitud_euc))
+print(paste('Exactitud de Kmeans con distancia de Manhattan (sólo variables numéricas): ', exactitud_man))
+print(paste('Exactitud de Kmeans con distancia de Gower (sólo variables numéricas): ', exactitud_gow))
+```
+
+Comparo los resutados de summary() para los grupos reales y los clústers según métricas:
+```{r message= FALSE, warning=FALSE}
+cat("\nHeartDisease (real) == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$etiqueta_real == 'Yes', vn])
+cat("\nHeartDisease (real) == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$etiqueta_real == 'No', vn])
+cat("\nClúster (kmeans - distancia euclidiana) == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_kmeans_euc == 'Yes', vn])
+cat("\nClúster (kmeans - distancia euclidiana) == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_kmeans_euc == 'No', vn])
+cat("\nClúster (kmeans - distancia Manhattan) == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_kmeans_man == 'Yes', vn])
+cat("\nClúster (kmeans - distancia Manhattan) == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_kmeans_man == 'No', vn])
+cat("\nClúster (kmeans - distancia Gower) == Yes:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_kmeans_gow == 'Yes', vn])
+cat("\nClúster (kmeans - distancia Gower) == No:\n"); summary(heart_pam_cluster[heart_pam_cluster$cluster_kmeans_gow == 'No', vn])
+```
+
+Observamos cómo en este dataset, para variables numéricas y sin tener en cuenta las variables categóricas, la distancia que mejor genera los clústers es la distancia de Manhattan, seguida por la de Gower y finalmente por la distancia euclidiana. Este método desprecia la información de las variables categóricas, lo que evitamos al usar pam() con la distancia de Gower y manteniendo las variables categóricas, mejorando así la exactitud de la clusterización.
+
+
+Estudio a continuación la clusterización con modelos basados en la densidad. Partiré de minPts = 12 (11 dimensiones + 1) y de eps = 0.165, como sugiere el siguiente gráfico.
+```{r message= FALSE, warning=FALSE}
+mdd <- daisy(heart_tr_norm_ne, metric = c("gower"))
+kNNdistplot(mdd, k = 12)
+abline(h = 0.165, lty = 2)
+```
+
+OPTICS. Con OPTICS no encuentro la combinación adecuada de eps_cl y minPts; o bien se obtiene un único clúster, o bien se obtienen 3 o más clústers con muchos puntos ruidosos.
+```{r message= FALSE, warning=FALSE}
+for (i in c(12, 18, 24)) {
+  for (j in c(0.1, 0.13, 0.165, 0.2)) {
+    heart_optics <- optics(mdd, minPts = i)
+    heart_optics_eD <- extractDBSCAN(heart_optics, eps_cl = j)
+    print(heart_optics_eD)
+    cat("\n\n")
+  }
+}
+```
+
+DBSCAN. Ocurre lo mismo que con extractDBSCAN de OPTICS.
+```{r message= FALSE, warning=FALSE}
+for (i in c(12, 18, 24)) {
+  for (j in c(0.1, 0.13, 0.165, 0.2)) {
+    heart_dbscan <- dbscan(mdd, minPts = i, eps = j)
+    heart_tr_norm_dbscan <- heart_tr_norm_ne
+    heart_tr_norm_dbscan['dbscan_cluster'] <- heart_dbscan$cluster
+    cat(paste('minPts: ', i, '; eps: ', j, sep=''))
+    print(table(heart_tr_norm_dbscan$dbscan_cluster))
+    cat("\n\n")
+  }
+}
+```
+
+Los algoritmos basados en densidad, pues, no resultan útiles para este dataset. Aunque usemos una matriz de dismilitud con la distancia de Gower para poder aplicar estos algoritmos, la densidad no es un buen criterio de clusterización en estos datos ya que, como vemos en las representaciones bidimensionales de las variables numéricas, los puntos forman un masa bastante homogénea, no hay 2 grupos claros, lo que hace que OPTICS y DBSCAN no clustericen adecuadamente. Para el caso actual, funciona sin duda mucho mejor el uso de medoids.
+
+
+
+Hasta ahora he utilizado modelos no supervisados para crear clústers. En adelante estudiaré los modelos supervisados, comenzando por un árbol de decisión.
+```{r message= FALSE, warning=FALSE}
+# Desordeno los datos:
+set.seed(9)
+heart_random <- heart_tr[sample(nrow(heart_tr)),1:12]  # Excluyo Resting_BP_cat.
+
+# Separo en variables explicativas 'x' y variable respuesta 'y':
+x <- heart_random[, 1:11]
+y <- heart_random[,'HeartDisease']
+
+# Creo los conjuntos de test y entrenamiento:
+split_prop <- 3
+set.seed(5)
+indexes <- sample(1:nrow(heart_random), size=floor(((split_prop-1)/split_prop)*nrow(heart_random)))
+train_x <- x[indexes,]
+train_y <- y[indexes,]
+test_x <- x[-indexes,]
+test_y <- y[-indexes,]
+
+# Creación del modelo.
+train_y <- as.factor(unlist(train_y))
+model1 <- C50::C5.0(train_x, train_y, rules=TRUE)
+summary(model1)
+```
+
+Muestro el gráfico de model1.
+```{r, fig.width=28, fig.height=10}
+model1 <- C50::C5.0(train_x, train_y, rules=FALSE)
+plot(model1)
+```
+
+Genero la curva ROC.
+```{r message= FALSE, warning=FALSE}
+model1_prob <- predict(model1, test_x, type = 'prob')
+pred_object_model1 <- prediction(predictions = model1_prob[,2], labels = test_y$HeartDisease)
+ROC_curve_model1 <- performance(pred_object_model1, "tpr", "fpr")
+```
+
+Aciertos de model1.
+```{r message= FALSE, warning=FALSE}
+predicted_model1 <- predict(model1, test_x, type="class")
+aciertos <- 100*sum(predicted_model1 == unlist(test_y))/length(predicted_model1)
+print(sprintf("Los aciertos del árbol son: %.2f %%", aciertos))
+```
+
+Errores de model1.
+```{r message= FALSE, warning=FALSE}
+# Matriz de confusión:
+table(Real=test_y$HeartDisease, Predicted=predicted_model1)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Tipos de error:
+
+test_y_num <- test_y
+test_y_num$rownum <- 1:nrow(test_y)
+
+# Falsos positivos:
+FP <- sum(predicted_model1[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'Yes')
+
+# Falsos negativos:
+FN <- sum(predicted_model1[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'No')
+
+# Verdadero positivo:
+TP <- sum(predicted_model1[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'Yes')
+
+# Verdadero negativo:
+TN <- sum(predicted_model1[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'No')
+
+# Sensibilidad:
+SE <- TP/(TP+FN)
+
+# Especificidad:
+ES <- TN/(TN+FP)
+
+# Precisión y F-measure:
+PR <- TP/(TP+FP)
+FM <- 2*((PR*SE)/(PR+SE))
+
+df_ms <- data.frame(Modelo = 'model1 de C5.0',
+                    Aciertos_conjunto_test = aciertos,
+                    Sensibilidad = SE,
+                    Especificidad = ES,
+                    Precisión = PR,
+                    F_measure = FM)
+
+print(paste('Sensibilidad model1 de C5.0: ', SE))
+print(paste('Especificidad model1 de C5.0: ', ES))
+print(paste('Precisión model1 de C5.0: ', PR))
+print(paste('F-measure model1 de C5.0: ', FM))
+```
+
+Repito pasos pero usando ahora solamente las variables más empleadas (> 25%) por C5.0; se reduce así el número de errores en el conjunto de entrenamiento; guardo el modelo en model2.
+```{r message= FALSE, warning=FALSE}
+# Redefino las variables explicativas 'x' y los conjuntos de test y entrenamiento afectados:
+x <- heart_random[, c('ST_Slope', 'ChestPainType', 'MaxHR', 'Sex', 'ExerciseAngina', 'Oldpeak', 'Age', 'RestingBP')]
+train_x <- x[indexes,]
+test_x <- x[-indexes,]
+
+# Creación del modelo.
+model2 <- C50::C5.0(train_x, train_y, rules=TRUE)
+summary(model2)
+```
+
+Muestro el gráfico de model2.
+```{r, fig.width=28, fig.height=10}
+model2 <- C50::C5.0(train_x, train_y, rules=FALSE)
+plot(model2)
+```
+
+Genero la curva ROC.
+```{r message= FALSE, warning=FALSE}
+model2_prob <- predict(model2, test_x, type = 'prob')
+pred_object_model2 <- prediction(predictions = model2_prob[,2], labels = test_y$HeartDisease)
+ROC_curve_model2 <- performance(pred_object_model2, "tpr", "fpr")
+```
+
+Aciertos de model2.
+```{r message= FALSE, warning=FALSE}
+predicted_model2 <- predict(model2, test_x, type="class")
+aciertos <- 100*sum(predicted_model2 == unlist(test_y))/length(predicted_model2)
+print(sprintf("Los aciertos del árbol son: %.2f %%", aciertos))
+```
+
+Errores de model2.
+```{r message= FALSE, warning=FALSE}
+# Matriz de confusión:
+table(Real=test_y$HeartDisease, Predicted=predicted_model2)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Tipos de error:
+
+test_y_num <- test_y
+test_y_num$rownum <- 1:nrow(test_y)
+
+# Falsos positivos:
+FP <- sum(predicted_model2[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'Yes')
+
+# Falsos negativos:
+FN <- sum(predicted_model2[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'No')
+
+# Verdadero positivo:
+TP <- sum(predicted_model2[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'Yes')
+
+# Verdadero negativo:
+TN <- sum(predicted_model2[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'No')
+
+# Sensibilidad:
+SE <- TP/(TP+FN)
+
+# Especificidad:
+ES <- TN/(TN+FP)
+
+# Precisión y F-measure:
+PR <- TP/(TP+FP)
+FM <- 2*((PR*SE)/(PR+SE))
+
+df_ms[nrow(df_ms) + 1, ] <- c('model2 de C5.0', aciertos, SE, ES, PR, FM)
+
+print(paste('Sensibilidad model2 de C5.0: ', SE))
+print(paste('Especificidad model2 de C5.0: ', ES))
+print(paste('Precisión model2 de C5.0: ', PR))
+print(paste('F-measure model2 de C5.0: ', FM))
+```
+
+C5.0 con 'adaptative boosting'. Mejoran los resultados.
+```{r message=FALSE, warning=FALSE}
+# Redefino las variables explicativas 'x' y los conjuntos de test y entrenamiento afectados:
+x <- heart_random[, 1:11]
+train_x <- x[indexes,]
+test_x <- x[-indexes,]
+
+# Creación del modelo.
+model3 <- C50::C5.0(train_x, train_y, rules=FALSE, trials = 50)
+
+# Genero la curva ROC:
+model3_prob <- predict(model3, test_x, type = 'prob')
+pred_object_model3 <- prediction(predictions = model3_prob[,2], labels = test_y$HeartDisease)
+ROC_curve_model3 <- performance(pred_object_model3, "tpr", "fpr")
+
+# Aciertos:
+predicted_model3 <- predict(model3, test_x, type="class")
+aciertos <- 100*sum(predicted_model3 == unlist(test_y))/length(predicted_model3)
+
+# Tipos de error:
+
+test_y_num <- test_y
+test_y_num$rownum <- 1:nrow(test_y)
+
+# Falsos positivos:
+FP <- sum(predicted_model3[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'Yes')
+
+# Falsos negativos:
+FN <- sum(predicted_model3[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'No')
+
+# Verdadero positivo:
+TP <- sum(predicted_model3[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'Yes')
+
+# Verdadero negativo:
+TN <- sum(predicted_model3[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'No')
+
+# Sensibilidad:
+SE <- TP/(TP+FN)
+
+# Especificidad:
+ES <- TN/(TN+FP)
+
+# Precisión y F-measure:
+PR <- TP/(TP+FP)
+FM <- 2*((PR*SE)/(PR+SE))
+
+df_ms[nrow(df_ms) + 1, ] <- c('model3 de C5.0 (adpatative boosting)', aciertos, SE, ES, PR, FM)
+
+print(sprintf("Los aciertos del árbol (model3 -adptative boosting-) son: %.2f %%", aciertos))
+print(paste('Sensibilidad model3 de C5.0: ', SE))
+print(paste('Especificidad model3 de C5.0: ', ES))
+print(paste('Precisión model3 de C5.0: ', PR))
+print(paste('F-measure model3 de C5.0: ', FM))
+```
+
+
+Exploro randomForest.
+```{r message=FALSE, warning=FALSE}
+set.seed(5)
+heart_rf <- randomForest(HeartDisease ~ ., data = heart_tr[,1:12])  # Excluyo Resting_BP_cat.
+varImpPlot(heart_rf, sort=TRUE, main = 'Variable importance in Heart dataset')
+```
+
+Creo un modelo con randomForest usando todas las variables.
+```{r message=FALSE, warning=FALSE}
+# Creo el modelo:
+train_y <- y[indexes,]
+conjunto_train <- bind_cols(train_x, train_y)
+set.seed(7)
+heart_rf_model1 <- randomForest(HeartDisease ~ ., data = conjunto_train)
+
+# Genero la curva ROC:
+heart_rf_predict1_prob <- predict(heart_rf_model1, test_x, type = 'prob')
+pred_object_rf1 <- prediction(predictions = heart_rf_predict1_prob[,2], labels = test_y$HeartDisease)
+ROC_curve_rf1 <- performance(pred_object_rf1, "tpr", "fpr")
+
+# Lo evalúo:
+heart_rf_predict1 <- predict(heart_rf_model1, test_x, type = "response")
+aciertos <- 100*sum(heart_rf_predict1 == unlist(test_y))/length(heart_rf_predict1)
+print(sprintf("Los aciertos del nuevo modelo con randomForest son: %.2f %%", aciertos))
+```
+
+Errores heart_rf_model1.
+```{r message= FALSE, warning=FALSE}
+# Matriz de confusión:
+table(Real=test_y$HeartDisease, Predicted=heart_rf_predict1)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Tipos de error:
+
+test_y_num <- test_y
+test_y_num$rownum <- 1:nrow(test_y)
+
+# Falsos positivos:
+FP <- sum(heart_rf_predict1[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'Yes')
+
+# Falsos negativos:
+FN <- sum(heart_rf_predict1[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'No')
+
+# Verdadero positivo:
+TP <- sum(heart_rf_predict1[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'Yes')
+
+# Verdadero negativo:
+TN <- sum(heart_rf_predict1[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'No')
+
+# Sensibilidad:
+SE <- TP/(TP+FN)
+
+# Especificidad:
+ES <- TN/(TN+FP)
+
+# Precisión y F-measure:
+PR <- TP/(TP+FP)
+FM <- 2*((PR*SE)/(PR+SE))
+
+df_ms[nrow(df_ms) + 1, ] <- c('heart_rf_model1', aciertos, SE, ES, PR, FM)
+
+print(paste('Sensibilidad heart_rf_model1: ', SE))
+print(paste('Especificidad heart_rf_model1: ', ES))
+print(paste('Precisión heart_rf_model1: ', PR))
+print(paste('F-measure heart_rf_model1: ', FM))
+```
+
+Creo un modelo con randomForest usando las variables más importantes según varImpPlot().
+```{r message=FALSE, warning=FALSE}
+# Redefino x y sus conjuntos de test y entrenamiento, además del conjunto_train:
+x <- heart_random[, c('ST_Slope', 'ChestPainType', 'Oldpeak', 'MaxHR', 'ExerciseAngina', 'Cholesterol', 'Age')]
+train_x <- x[indexes,]
+test_x <- x[-indexes,]
+conjunto_train <- bind_cols(train_x, train_y)
+
+# Creo el modelo:
+set.seed(8)
+heart_rf_model2 <- randomForest(HeartDisease ~ ., data = conjunto_train)
+
+# Genero la curva ROC:
+heart_rf_predict2_prob <- predict(heart_rf_model2, test_x, type = 'prob')
+pred_object_rf2 <- prediction(predictions = heart_rf_predict2_prob[,2], labels = test_y$HeartDisease)
+ROC_curve_rf2 <- performance(pred_object_rf2, "tpr", "fpr")
+
+# Lo evalúo:
+heart_rf_predict2 <- predict(heart_rf_model2, test_x, type = "response")
+aciertos <- 100*sum(heart_rf_predict2 == unlist(test_y))/length(heart_rf_predict2)
+print(sprintf("Los aciertos del nuevo modelo con randomForest son: %.2f %%", aciertos))
+```
+
+Errores heart_rf_model2.
+```{r message= FALSE, warning=FALSE}
+# Matriz de confusión:
+table(Real=test_y$HeartDisease, Predicted=heart_rf_predict2)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Tipos de error:
+
+test_y_num <- test_y
+test_y_num$rownum <- 1:nrow(test_y)
+
+# Falsos positivos:
+FP <- sum(heart_rf_predict2[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'Yes')
+
+# Falsos negativos:
+FN <- sum(heart_rf_predict2[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'No')
+
+# Verdadero positivo:
+TP <- sum(heart_rf_predict2[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'Yes')
+
+# Verdadero negativo:
+TN <- sum(heart_rf_predict2[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'No')
+
+# Sensibilidad:
+SE <- TP/(TP+FN)
+
+# Especificidad:
+ES <- TN/(TN+FP)
+
+# Precisión y F-measure:
+PR <- TP/(TP+FP)
+FM <- 2*((PR*SE)/(PR+SE))
+
+df_ms[nrow(df_ms) + 1, ] <- c('heart_rf_model2', aciertos, SE, ES, PR, FM)
+
+print(paste('Sensibilidad heart_rf_model2: ', SE))
+print(paste('Especificidad heart_rf_model2: ', ES))
+print(paste('Precisión heart_rf_model2: ', PR))
+print(paste('F-measure heart_rf_model2: ', FM))
+```
+
+Uso randomForest aumentando el parámetro ntree. No hay mejoría.
+```{r message=FALSE, warning=FALSE}
+# Redefino x y sus conjuntos de test y entrenamiento, además del conjunto_train:
+x <- heart_random[, names(heart_random) != 'HeartDisease']
+train_x <- x[indexes,]
+test_x <- x[-indexes,]
+conjunto_train <- bind_cols(train_x, train_y)
+
+# Creo el modelo:
+set.seed(7)
+heart_rf_model3 <- randomForest(HeartDisease ~ ., data = conjunto_train, ntree = 1700)
+
+# Genero la curva ROC:
+heart_rf_predict3_prob <- predict(heart_rf_model3, test_x, type = 'prob')
+pred_object_rf3 <- prediction(predictions = heart_rf_predict3_prob[,2], labels = test_y$HeartDisease)
+ROC_curve_rf3 <- performance(pred_object_rf3, "tpr", "fpr")
+
+# Lo evalúo:
+heart_rf_predict3 <- predict(heart_rf_model3, test_x, type = "response")
+aciertos <- 100*sum(heart_rf_predict3 == unlist(test_y))/length(heart_rf_predict3)
+
+# Tipos de error:
+
+test_y_num <- test_y
+test_y_num$rownum <- 1:nrow(test_y)
+
+# Falsos positivos:
+FP <- sum(heart_rf_predict3[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'Yes')
+
+# Falsos negativos:
+FN <- sum(heart_rf_predict3[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'No')
+
+# Verdadero positivo:
+TP <- sum(heart_rf_predict3[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'Yes')
+
+# Verdadero negativo:
+TN <- sum(heart_rf_predict3[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'No')
+
+# Sensibilidad:
+SE <- TP/(TP+FN)
+
+# Especificidad:
+ES <- TN/(TN+FP)
+
+# Precisión y F-measure:
+PR <- TP/(TP+FP)
+FM <- 2*((PR*SE)/(PR+SE))
+
+df_ms[nrow(df_ms) + 1, ] <- c('heart_rf_model3', aciertos, SE, ES, PR, FM)
+
+print(sprintf("Los aciertos del nuevo modelo con randomForest (todas las variables, aumento ntrees) son: %.2f %%", aciertos))
+print(paste('Sensibilidad heart_rf_model3: ', SE))
+print(paste('Especificidad heart_rf_model3: ', ES))
+print(paste('Precisión heart_rf_model3: ', PR))
+print(paste('F-measure heart_rf_model3: ', FM))
+```
+
+
+Utilizo un nuevo modelo supervisado, en esta ocasión KNN de la librería caret (que permite el uso de variables categóricas en el algoritmo KNN).
+```{r message=FALSE, warning=FALSE}
+# Preparo los datos, redefiniendo x, sus conjuntos de test y entrenamiento y el conjunto_train:
+x <- heart_random[, c('ST_Slope', 'ChestPainType', 'Oldpeak', 'MaxHR', 'ExerciseAngina')]  # Es la cantidad de variables importantes (por orden de importancia) que mejor resultado da con KNN.
+train_x <- x[indexes,]
+test_x <- x[-indexes,]
+conjunto_train <- bind_cols(train_x, train_y)
+
+# Creo el modelo:
+modelo_knn1 <- knn3(HeartDisease ~ ., data = conjunto_train, k=5)
+
+# Genero la curva ROC:
+modelo_knn1_predict_prob <- predict(modelo_knn1, test_x, type = 'prob')
+pred_object_knn1 <- prediction(predictions = modelo_knn1_predict_prob[,2], labels = test_y$HeartDisease)
+ROC_curve_knn1 <- performance(pred_object_knn1, "tpr", "fpr")
+
+# Lo evalúo:
+modelo_knn1_predict <- predict(modelo_knn1, test_x, type = 'class')
+aciertos <- 100*sum(modelo_knn1_predict == unlist(test_y))/length(modelo_knn1_predict)
+print(sprintf("Los aciertos del nuevo modelo con knn son: %.2f %%", aciertos))
+```
+
+Errores modelo_knn1.
+```{r message= FALSE, warning=FALSE}
+# Matriz de confusión:
+table(Real=test_y$HeartDisease, Predicted=modelo_knn1_predict)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Tipos de error:
+
+test_y_num <- test_y
+test_y_num$rownum <- 1:nrow(test_y)
+
+# Falsos positivos:
+FP <- sum(modelo_knn1_predict[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'Yes')
+
+# Falsos negativos:
+FN <- sum(modelo_knn1_predict[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'No')
+
+# Verdadero positivo:
+TP <- sum(modelo_knn1_predict[unlist(test_y_num[test_y_num$HeartDisease == 'Yes', 'rownum'])] == 'Yes')
+
+# Verdadero negativo:
+TN <- sum(modelo_knn1_predict[unlist(test_y_num[test_y_num$HeartDisease == 'No', 'rownum'])] == 'No')
+
+# Sensibilidad:
+SE <- TP/(TP+FN)
+
+# Especificidad:
+ES <- TN/(TN+FP)
+
+# Precisión y F-measure:
+PR <- TP/(TP+FP)
+FM <- 2*((PR*SE)/(PR+SE))
+
+df_ms[nrow(df_ms) + 1, ] <- c('modelo_knn1', aciertos, SE, ES, PR, FM)
+
+print(paste('Sensibilidad modelo_knn1: ', SE))
+print(paste('Especificidad modelo_knn1: ', ES))
+print(paste('Precisión modelo_knn1: ', PR))
+print(paste('F-measure modelo_knn1: ', FM))
+```
+
+Resumen de los distintos modelos supervisados.
+```{r message=FALSE, warning=FALSE}
+df_ms
+```
+
+Curvas ROC.
+```{r message=FALSE, warning=FALSE}
+plot(ROC_curve_model1, col = 1)
+plot(ROC_curve_model2, add = TRUE, col = 2)
+plot(ROC_curve_model3, add = TRUE, col = 3)
+plot(ROC_curve_rf1, add = TRUE, col = 4)
+plot(ROC_curve_rf2, add = TRUE, col = 5)
+plot(ROC_curve_rf3, add = TRUE, col = 6)
+plot(ROC_curve_knn1, add = TRUE, col = 7)
+legend("bottomright", legend = c('ROC_curve_C5.0_model1',
+                                 'ROC_curve_C5.0_model2',
+                                 'ROC_curve_C5.0_model3',
+                                 'ROC_curve_rf1',
+                                 'ROC_curve_rf2',
+                                 'ROC_curve_rf3',
+                                 'ROC_curve_knn1'), col = 1:7, pch = 19)
+```
+
+Definitivamente, el modelo de más calidad es el model3 de C5.0 (con adpatative boosting), cuya sensibilidad es del 91% y cuya especificidad es del 87%. La especificidad es el punto débil de este modelo (< 90%): de los negativos (no cardiópatas) reales, una cantidad no despreciable será catalogada como cardiópata, con el gasto sanitario secundario a este error.
+
+
+## Conclusiones
+
+El mejor método de clusterización para este dataset es mediante el uso de la función pam() con la distancia de Gower (la cual permite mantener las variables categóricas), que brinda una exactitud de 0.84.
+
+Teniendo en cuenta sólo las variables numéricas, la distancia que mejor funciona en este caso es la de Manhattan, que con kmeans llega a una clusterización de exactitud igual a 0.72.
+
+Los algoritmos de clusterización basados en la densidad no dan buenos resultados en este conjunto de datos, lo que se debe al hecho de que las observaciones forman una masa bastante homogénea de puntos en la que resulta difícil discernir más de un grupo.
+
+De los modelos supervisados, el de mejores resultados es el model3 de C5.0 (con adpatative boosting), con sensibilidad 91%, especificidad 87%, precisión 91% y F-measure 91%. La especificidad es el peor aspecto de este modelo (< 90%), lo que conlleva más riesgo de falsos positivos. Este hecho puede conducir a consumir recursos sanitarios innecesariamente.
+
+
+
+# Bibliografía
+
+- https://www.kaggle.com/datasets/fedesoriano/heart-failure-prediction
+
+- https://towardsdatascience.com/heart-disease-uci-diagnosis-prediction-b1943ee835a7
+
+- fedesoriano. (September 2021). Heart Failure Prediction Dataset. Retrieved 19/04/22 from https://www.kaggle.com/fedesoriano/heart-failure-prediction.
+
+- https://stackoverflow.com/questions/58677491/summarizing-using-dplyr-with-a-for-loop
+
+- https://stackoverflow.com/questions/64065003/how-do-double-curly-brackets-work-in-dplyr
+
+- https://www.rdocumentation.org/packages/ggplot2/versions/1.0.0/topics/aes_string
+
+- https://stackoverflow.com/questions/1330989/rotating-and-spacing-axis-labels-in-ggplot2
+
+- https://stackoverflow.com/questions/13649473/add-a-common-legend-for-combined-ggplots
+
+- https://stackoverflow.com/questions/65694397/add-main-title-multiple-plots-ggarange
+
+- https://stackoverflow.com/questions/14942681/change-size-of-axes-title-and-labels-in-ggplot2
+
+- https://stackoverflow.com/questions/4108577/cast-function-argument-as-a-character-string
+
+- https://bookdown.org/jboscomendoza/r-principiantes4/if-else.html
+
+- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/wilcox.test
+
+- http://www.sthda.com/english/wiki/unpaired-two-samples-wilcoxon-test-in-r
+
+- http://www.sthda.com/english/wiki/kruskal-wallis-test-in-r
+
+- https://stats.stackexchange.com/questions/484299/how-to-check-the-correlation-between-categorical-and-numeric-independent-variabl
+
+- https://stackoverflow.com/questions/43115482/quantile-results-for-the-entire-dataframe
+
+- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/quantile
+
+- https://www.r-bloggers.com/2020/01/how-to-remove-outliers-in-r/#:~:text=The%20interquartile%20range%20is%20the,of%201.5%20times%20the%20IQR.&text=And%20an%20outlier%20would%20be,Q3%2B(1.5)IQR%5D.
+
+- https://www.rdocumentation.org/packages/utils/versions/3.6.2/topics/combn
+
+- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/chisq.test
+
+- https://rpubs.com/osoramirez/111403
+
+- https://support.minitab.com/es-mx/minitab/18/help-and-how-to/statistics/tables/how-to/chi-square-test-for-association/interpret-the-results/all-statistics/
+
+- https://www.rdocumentation.org/packages/graphics/versions/3.6.2/topics/mosaicplot
+
+- https://www.rdocumentation.org/packages/graphics/versions/3.6.2/topics/par
+
+- https://www.rdocumentation.org/packages/arules/versions/1.7-3/topics/discretize
+
+- https://stats.stackexchange.com/questions/482462/eigenvalues-from-prcomp
+
+- https://medium.com/@rumman1988/clustering-categorical-and-numerical-datatype-using-gower-distance-ab89b3aa90d9
+
+- https://www.rdocumentation.org/packages/cluster/versions/2.1.3/topics/pam
+
+- https://www.rdocumentation.org/packages/cluster/versions/2.1.3/topics/
+
+- https://www.rdocumentation.org/packages/cluster/versions/2.1.3/topics/daisy
+
+- https://stackoverflow.com/questions/41907182/creating-a-function-for-a-mosaic-plot-with-ggmosaic-using-standard-evaluation
+
+- https://www.rdocumentation.org/packages/klaR/versions/1.7-0/topics/kmodes
+
+- https://www.rdocumentation.org/packages/cluster/versions/2.1.3/topics/daisy
+
+- https://stats.stackexchange.com/questions/81481/why-does-k-means-clustering-algorithm-use-only-euclidean-distance-metric
+
+- https://es.wikipedia.org/wiki/K-medoids#:~:text=Un%20medoid%20puede%20ser%20definido,centro%20en%20todo%20el%20grupo.
+
+- https://www.datanovia.com/en/lessons/dbscan-density-based-clustering-essentials/#method-for-determining-the-optimal-eps-value
+
+- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/kmeans
+
+- https://www.rdocumentation.org/packages/dbscan/versions/0.9-8/topics/optics
+
+- https://elutins.medium.com/dbscan-what-is-it-when-to-use-it-how-to-use-it-8bd506293818
+
+- https://www.statology.org/dplyr-error-in-select-unused-arguments/
+
+- https://stackoverflow.com/questions/30058362/r-convert-from-categorical-to-numeric-for-knn
+
+- https://www.rdocumentation.org/packages/caret/versions/6.0-92/topics/knn3
+
+- https://www.rdocumentation.org/packages/caret/versions/6.0-92/topics/predict.knn3
+
+- https://towardsdatascience.com/intuitively-understand-roc-and-implement-it-in-r-and-python-b6aa1e8508d
+
+- https://www.rdocumentation.org/packages/ROCR/versions/1.0-1/topics/performance
+
+- https://www.rdocumentation.org/packages/ROCR/versions/1.0-1/topics/prediction
+
+- https://www.rdocumentation.org/packages/randomForest/versions/4.7-1.1/topics/predict.randomForest
+
+- https://www.rdocumentation.org/packages/C50/versions/0.1.6/topics/predict.C5.0
+
+- https://stackoverflow.com/questions/11467855/roc-curve-in-r-using-rocr-package
+
+- https://arulvelkumar.wordpress.com/2017/09/03/prediction-function-in-r-number-of-cross-validation-runs-must-be-equal-for-predictions-and-labels/
+
+- https://stackoverflow.com/questions/14085281/multiple-roc-curves-in-one-plot-rocr
+
+- https://bookdown.org/rdpeng/exdata/plotting-and-color-in-r.html
+
+- https://www.r-bloggers.com/2014/12/a-small-introduction-to-the-rocr-package/
+
+- https://cran.r-project.org/web/packages/ROCR/ROCR.pdf
